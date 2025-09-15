@@ -3,7 +3,12 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const OpenAI = require('openai');
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+if (!process.env.OPENAI_API_KEY) {
+  console.error("❌ ERROR: OPENAI_API_KEY missing!");
+}
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
 // ---------- CONFIG ----------
 const ROLE_SKILLS = {
