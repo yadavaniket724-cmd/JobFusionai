@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "render-build": "npm install --omit=dev && npm rebuild sqlite3"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -15,9 +15,13 @@
     "openai": "^4.0.0",
     "pdf-parse": "^1.1.1",
     "mammoth": "^1.6.0",
-    "sqlite3": "^5.1.6"
+    "sqlite3": "^5.1.6",
+    "puppeteer": "^22.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.3"
+  },
+  "puppeteer": {
+    "skip_chromium_download": false
   }
 }
