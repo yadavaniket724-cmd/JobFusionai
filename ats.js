@@ -1,142 +1,144 @@
-// ats.js - AI powered ATS + Resume Analyzer
-const fs = require("fs");
-const path = require("path");
-const OpenAI = require("openai");
-const pdfParse = require("pdf-parse"); // requires: npm install pdf-parse
-const mammoth = require("mammoth");    // requires: npm install mammoth
+/**
+ * ats.js - Professional ATS + AI engine
+ * Features:
+ * - Resume text extraction (PDF, DOCX, TXT)
+ * - Structured parsing with GPT
+ * - Hybrid scoring (rule-based + GPT)
+ * - Semantic JD ↔ Resume matching (embeddings + cosine similarity)
+ * - Interview question generation
+ */
 
-if (!process.env.OPENAI_API_KEY) {
-  console.error("❌ ERROR: OPENAI_API_KEY missing! Please set it before running.");
-}
+const fs = require("fs");
+const pdfParse = require("pdf-parse");
+const mammoth = require("mammoth");
+const { OpenAI } = require("openai");
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-/* ------------------- TEXT EXTRACTION ------------------- */
+// --------- Helpers ---------
 async function robustExtractText(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-  try {
-    if (ext === ".txt") {
-      return fs.readFileSync(filePath, "utf8");
-    } else if (ext === ".pdf") {
-      const data = await pdfParse(fs.readFileSync(filePath));
-      return data.text;
-    } else if (ext === ".docx") {
-      const result = await mammoth.extractRawText({ path: filePath });
-      return result.value;
-    } else {
-      return fs.readFileSync(filePath, "utf8");
-    }
-  } catch (err) {
-    console.error("⚠️ Text extraction failed:", err.message);
-    return "";
+  if (filePath.endsWith(".pdf")) {
+    const buffer = fs.readFileSync(filePath);
+    const data = await pdfParse(buffer);
+    return data.text;
+  } else if (filePath.endsWith(".docx")) {
+    const result = await mammoth.extractRawText({ path: filePath });
+    return result.value;
+  } else {
+    return fs.readFileSync(filePath, "utf8");
   }
 }
 
-/* ------------------- RESUME QUALITY CHECK ------------------- */
-async function checkResumeQuality(filePath, SPELL = null) {
-  const text = await robustExtractText(filePath);
-  if (!text) {
-    return { buildQualityScore: 0, suggestions: ["Resume text could not be extracted."], pages: 0 };
-  }
-
-  const prompt = `
-  You are an advanced ATS scanner. Analyze the following resume text:
-  1. Give a Build Quality Score (0-100).
-  2. List top suggestions to improve formatting, grammar, and ATS optimization.
-  3. Highlight missing sections (summary, skills, projects, etc.).
-  Resume:
-  """${text.slice(0, 3000)}"""
-  `;
-
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [{ role: "system", content: "You are an expert resume evaluator." },
-               { role: "user", content: prompt }],
-    temperature: 0.3
+async function computeEmbedding(text) {
+  const res = await openai.embeddings.create({
+    model: "text-embedding-3-large",
+    input: text
   });
-
-  const analysis = response.choices[0].message.content;
-  let buildQualityScore = 70; // default fallback
-  const scoreMatch = analysis.match(/(\d{1,3})/);
-  if (scoreMatch) {
-    buildQualityScore = Math.min(100, parseInt(scoreMatch[1]));
-  }
-
-  return {
-    buildQualityScore,
-    suggestions: analysis.split("\n").filter(line => line.trim().length > 5),
-    sampleText: text.slice(0, 500),
-    pages: Math.ceil(text.length / 2000)
-  };
+  return res.data[0].embedding;
 }
 
-/* ------------------- RESUME VS JD ANALYSIS ------------------- */
-async function analyzeResumeWithJD(resumePath, jdPath, jdText = "") {
+function cosineSimilarity(vecA, vecB) {
+  let dot = 0.0, normA = 0.0, normB = 0.0;
+  for (let i = 0; i < vecA.length; i++) {
+    dot += vecA[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
+    normB += vecB[i] * vecB[i];
+  }
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// --------- Core ATS Functions ---------
+async function parseResumeToJSON(resumeText) {
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: "Extract resume into structured JSON with fields: contact, skills[], education[], experience[]." },
+      { role: "user", content: resumeText }
+    ],
+    temperature: 0
+  });
+  try {
+    return JSON.parse(completion.choices[0].message.content);
+  } catch {
+    return { contact: {}, skills: [], education: [], experience: [] };
+  }
+}
+
+function ruleBasedScore(parsed) {
+  let score = 0;
+  if (parsed.skills.length > 5) score += 20;
+  if (parsed.education.length > 0) score += 20;
+  if (parsed.experience.length > 0) score += 30;
+  if (parsed.contact && parsed.contact.email) score += 10;
+  return score; // out of 80
+}
+
+async function gptQualityScore(resumeText) {
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: "You are an ATS resume analyzer. Give ATS score (0-100) and improvement suggestions." },
+      { role: "user", content: resumeText }
+    ]
+  });
+  return completion.choices[0].message.content;
+}
+
+async function checkResumeQuality(filePath) {
+  const resumeText = await robustExtractText(filePath);
+  const parsed = await parseResumeToJSON(resumeText);
+
+  // Rule-based part
+  const rbScore = ruleBasedScore(parsed);
+
+  // GPT-based score + suggestions
+  const gptResp = await gptQualityScore(resumeText);
+  let aiScore = 60;
+  let suggestions = [];
+  try {
+    const match = gptResp.match(/(\d{1,3})/);
+    if (match) aiScore = Math.min(100, parseInt(match[1]));
+    suggestions = gptResp.split("\n").slice(1);
+  } catch { suggestions = [gptResp]; }
+
+  const finalScore = Math.round((rbScore * 0.4) + (aiScore * 0.6));
+  return { buildQualityScore: finalScore, suggestions, parsedResume: parsed };
+}
+
+async function analyzeResumeWithJD(resumePath, jdPath, jdText) {
   const resumeText = await robustExtractText(resumePath);
-  let jdContent = jdText;
-  if (jdPath) {
-    jdContent = await robustExtractText(jdPath);
-  }
+  const jobText = jdText || await robustExtractText(jdPath);
 
-  if (!resumeText || !jdContent) {
-    return { matchPercent: 0, found: [], missing: [], keywords: [] };
-  }
+  const resumeEmbedding = await computeEmbedding(resumeText);
+  const jdEmbedding = await computeEmbedding(jobText);
 
-  // Embeddings similarity
-  const [resumeEmbedding, jdEmbedding] = await Promise.all([
-    openai.embeddings.create({ model: "text-embedding-3-small", input: resumeText }),
-    openai.embeddings.create({ model: "text-embedding-3-small", input: jdContent })
-  ]);
-
-  const v1 = resumeEmbedding.data[0].embedding;
-  const v2 = jdEmbedding.data[0].embedding;
-
-  const dot = v1.reduce((sum, val, i) => sum + val * v2[i], 0);
-  const norm1 = Math.sqrt(v1.reduce((sum, val) => sum + val * val, 0));
-  const norm2 = Math.sqrt(v2.reduce((sum, val) => sum + val * val, 0));
-  const similarity = dot / (norm1 * norm2 + 1e-8);
-
+  const similarity = cosineSimilarity(resumeEmbedding, jdEmbedding);
   const matchPercent = Math.round(similarity * 100);
 
-  // Ask GPT for found/missing keywords
-  const prompt = `
-  Compare this resume with the job description.
-  1. Extract top 10 keywords from JD.
-  2. Which keywords are present in resume? Which are missing?
-  Resume: """${resumeText.slice(0, 3000)}"""
-  JD: """${jdContent.slice(0, 3000)}"""
-  `;
-
-  const response = await openai.chat.completions.create({
+  // Keywords analysis via GPT
+  const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    messages: [{ role: "system", content: "You are an ATS comparison engine." },
-               { role: "user", content: prompt }],
-    temperature: 0.3
+    messages: [
+      { role: "system", content: "Compare resume and JD. List keywords/skills found and missing." },
+      { role: "user", content: `Resume:\n${resumeText}\n\nJD:\n${jobText}` }
+    ]
   });
 
-  return {
-    matchPercent,
-    analysis: response.choices[0].message.content
-  };
+  return { matchPercent, keywords: completion.choices[0].message.content };
 }
 
-/* ------------------- INTERVIEW QUESTIONS ------------------- */
-async function generateInterviewQuestions(jdText, n = 10) {
-  const prompt = `
-  Based on this job description, generate ${n} relevant and challenging interview questions:
-  """${jdText}"""
-  `;
-
-  const response = await openai.chat.completions.create({
+async function generateInterviewQuestions(jdText, n = 5) {
+  const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    messages: [{ role: "system", content: "You are an expert interviewer." },
-               { role: "user", content: prompt }],
-    temperature: 0.5
+    messages: [
+      { role: "system", content: "Generate interview questions based on the job description." },
+      { role: "user", content: jdText }
+    ],
+    temperature: 0.7
   });
 
-  return response.choices[0].message.content.split("\n").filter(q => q.trim().length > 5);
+  return completion.choices[0].message.content.split("\n").slice(0, n);
 }
 
-/* ------------------- EXPORTS ------------------- */
 module.exports = {
   robustExtractText,
   checkResumeQuality,
