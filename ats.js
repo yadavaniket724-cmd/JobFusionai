@@ -1,18 +1,22 @@
 /**
- * ats.js - Professional ATS + AI engine
- * Features:
- * - Resume text extraction (PDF, DOCX, TXT)
- * - Structured parsing with GPT
- * - Hybrid scoring (rule-based + GPT)
- * - Semantic JD ↔ Resume matching (embeddings + cosine similarity)
- * - Interview question generation
+ * ats.js - Professional ATS + AI engine (Render-safe)
+ * Lazy loads OpenAI and defers heavy work until requests
  */
 
 const fs = require("fs");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
-const { OpenAI } = require("openai");
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+let OpenAI, openai;
+
+// Lazy-load OpenAI client
+function getOpenAI() {
+  if (!openai) {
+    OpenAI = require("openai").OpenAI;
+    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  return openai;
+}
 
 // --------- Helpers ---------
 async function robustExtractText(filePath) {
@@ -29,7 +33,8 @@ async function robustExtractText(filePath) {
 }
 
 async function computeEmbedding(text) {
-  const res = await openai.embeddings.create({
+  const client = getOpenAI();
+  const res = await client.embeddings.create({
     model: "text-embedding-3-large",
     input: text
   });
@@ -48,7 +53,8 @@ function cosineSimilarity(vecA, vecB) {
 
 // --------- Core ATS Functions ---------
 async function parseResumeToJSON(resumeText) {
-  const completion = await openai.chat.completions.create({
+  const client = getOpenAI();
+  const completion = await client.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
       { role: "system", content: "Extract resume into structured JSON with fields: contact, skills[], education[], experience[]." },
@@ -73,7 +79,8 @@ function ruleBasedScore(parsed) {
 }
 
 async function gptQualityScore(resumeText) {
-  const completion = await openai.chat.completions.create({
+  const client = getOpenAI();
+  const completion = await client.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
       { role: "system", content: "You are an ATS resume analyzer. Give ATS score (0-100) and improvement suggestions." },
@@ -87,11 +94,9 @@ async function checkResumeQuality(filePath) {
   const resumeText = await robustExtractText(filePath);
   const parsed = await parseResumeToJSON(resumeText);
 
-  // Rule-based part
   const rbScore = ruleBasedScore(parsed);
-
-  // GPT-based score + suggestions
   const gptResp = await gptQualityScore(resumeText);
+
   let aiScore = 60;
   let suggestions = [];
   try {
@@ -106,7 +111,7 @@ async function checkResumeQuality(filePath) {
 
 async function analyzeResumeWithJD(resumePath, jdPath, jdText) {
   const resumeText = await robustExtractText(resumePath);
-  const jobText = jdText || await robustExtractText(jdPath);
+  const jobText = jdText || (jdPath ? await robustExtractText(jdPath) : "");
 
   const resumeEmbedding = await computeEmbedding(resumeText);
   const jdEmbedding = await computeEmbedding(jobText);
@@ -114,8 +119,8 @@ async function analyzeResumeWithJD(resumePath, jdPath, jdText) {
   const similarity = cosineSimilarity(resumeEmbedding, jdEmbedding);
   const matchPercent = Math.round(similarity * 100);
 
-  // Keywords analysis via GPT
-  const completion = await openai.chat.completions.create({
+  const client = getOpenAI();
+  const completion = await client.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
       { role: "system", content: "Compare resume and JD. List keywords/skills found and missing." },
@@ -127,7 +132,8 @@ async function analyzeResumeWithJD(resumePath, jdPath, jdText) {
 }
 
 async function generateInterviewQuestions(jdText, n = 5) {
-  const completion = await openai.chat.completions.create({
+  const client = getOpenAI();
+  const completion = await client.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
       { role: "system", content: "Generate interview questions based on the job description." },
