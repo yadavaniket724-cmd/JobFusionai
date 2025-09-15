@@ -12,5 +12,3 @@ services:
     healthCheckPath: /
     branch: main
     region: oregon
-    runtime: node
-    nodeVersion: 18
