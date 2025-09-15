@@ -10,6 +10,18 @@
     .btn { padding: 8px 14px; margin: 6px; background: #007bff; color: white; border: none; cursor: pointer; }
     .btn:disabled { background: gray; cursor: not-allowed; }
     .result-box { background: #f9f9f9; padding: 12px; margin-top: 10px; border-radius: 6px; }
+
+    /* Score colors */
+    .score-good { color: green; font-weight: bold; }
+    .score-mid { color: darkorange; font-weight: bold; }
+    .score-bad { color: red; font-weight: bold; }
+
+    /* Suggestions */
+    .suggestion-list { list-style: none; padding: 0; }
+    .suggestion-list li { margin: 6px 0; padding: 6px; border-radius: 4px; }
+    .suggestion-bad { background: #ffe5e5; color: #a30000; }
+    .suggestion-mid { background: #fff4e5; color: #a35b00; }
+    .suggestion-good { background: #e6ffe6; color: #006600; }
   </style>
 </head>
 <body>
@@ -61,10 +73,18 @@
       const formData = new FormData(e.target);
       const res = await fetch("/uploadResume", { method: "POST", body: formData });
       const data = await res.json();
-      let html = `<strong>ATS Build Score:</strong> ${data.buildQualityScore}<br>`;
-      if (data.suggestions) {
-        html += `<strong>Suggestions:</strong><ul>`;
-        data.suggestions.forEach(s => html += `<li>${s}</li>`);
+
+      let scoreClass = data.buildQualityScore >= 80 ? "score-good" : data.buildQualityScore >= 60 ? "score-mid" : "score-bad";
+      let statusMsg = data.buildQualityScore >= 80 ? "✅ Ready to proceed!" : data.buildQualityScore >= 60 ? "⚠️ Needs some improvements" : "❌ Major changes required";
+
+      let html = `<p><strong>ATS Build Score:</strong> <span class="${scoreClass}">${data.buildQualityScore}</span> - ${statusMsg}</p>`;
+
+      if (data.suggestions && data.suggestions.length > 0) {
+        html += `<strong>Suggestions:</strong><ul class="suggestion-list">`;
+        data.suggestions.forEach(s => {
+          let sugClass = data.buildQualityScore >= 80 ? "suggestion-good" : data.buildQualityScore >= 60 ? "suggestion-mid" : "suggestion-bad";
+          html += `<li class="${sugClass}">💡 ${s}</li>`;
+        });
         html += `</ul>`;
       }
       document.getElementById("qualityResult").innerHTML = html;
