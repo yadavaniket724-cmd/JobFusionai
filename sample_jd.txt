@@ -1,0 +1,5 @@
+We are hiring a Senior Backend Engineer with experience in Node.js, AWS, Docker, and SQL.
+Responsibilities:
+- Design and implement scalable backend services.
+- Work with databases and cloud infrastructure.
+Requirements: Node.js, AWS, Docker, REST APIs, SQL

@@ -1,0 +1,8 @@
+John Doe
+Email: john.doe@example.com
+Experience
+- Software Engineer at Acme Corp (2019-2024)
+- Worked on backend systems, Node.js, AWS, SQL
+Education
+- B.Tech in Computer Science
+Skills: Node.js, JavaScript, SQL, AWS, Docker
