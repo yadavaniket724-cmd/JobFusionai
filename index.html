@@ -1,164 +1,122 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>JobFusion.AI — Resume Analyzer</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <meta charset="UTF-8">
+  <title>JobFusion AI - Resume Analyzer</title>
   <style>
-    body { background:#f6f8fa; min-height:100vh; }
-    .container-main { width:100%; max-width:1000px; margin:20px auto; }
-    .hidden { display:none; }
-    nav .nav-link { color: #fff; }
-    #topNav { background: linear-gradient(135deg,#0d6efd,#4dabf7); }
-    pre.sample { max-height:200px; overflow:auto; background:#fff; padding:10px; border-radius:6px; }
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .step { display: none; }
+    .active { display: block; }
+    .btn { padding: 8px 14px; margin: 6px; background: #007bff; color: white; border: none; cursor: pointer; }
+    .btn:disabled { background: gray; cursor: not-allowed; }
+    .result-box { background: #f9f9f9; padding: 12px; margin-top: 10px; border-radius: 6px; }
   </style>
 </head>
 <body>
-<nav id="topNav" class="navbar navbar-expand-lg navbar-dark">
-  <div class="container-fluid">
-    <a class="navbar-brand" href="#">JobFusion.AI</a>
-    <div class="collapse navbar-collapse">
-      <ul class="navbar-nav ms-auto">
-        <li class="nav-item"><a class="nav-link" href="#" onclick="showPage('pageHome')">Home</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" onclick="showPage('pageResume')">Resume</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" onclick="showPage('pageJD')">JD</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" onclick="showPage('pageHistory')">History</a></li>
-      </ul>
-    </div>
-  </div>
-</nav>
+  <h1>JobFusion AI - Resume ATS Analyzer</h1>
 
-<div class="container-main card p-4">
-  <div id="pageHome">
-    <h2>Welcome to JobFusion.AI</h2>
-    <p>Smart resume & JD matcher — get ATS scoring, improvements, interview questions and more.</p>
-    <button id="startBtn" class="btn btn-light">Start</button>
-  </div>
-
-  <div id="pageResume" class="hidden">
-    <h3>Step 1 — Upload Resume</h3>
-    <form id="frmResume">
-      <div class="mb-3">
-        <input type="file" name="resume" class="form-control" accept=".pdf,.txt,.doc,.docx">
-      </div>
-      <button class="btn btn-primary" type="submit">Upload & Scan</button>
+  <!-- Step 1 -->
+  <div id="step1" class="step active">
+    <h2>Step 1: Upload Resume</h2>
+    <form id="resumeForm">
+      <input type="file" name="resume" required />
+      <button type="submit" class="btn">Check Quality</button>
     </form>
-    <div id="scanResult" class="mt-3"></div>
+    <div id="qualityResult" class="result-box"></div>
+    <button class="btn" id="toStep2" disabled>Next →</button>
   </div>
 
-  <div id="pageJD" class="hidden">
-    <h3>Step 2 — Job Description</h3>
-    <p>Either paste JD text or upload a JD file. The resume uploaded in Step 1 will be reused automatically.</p>
-    <form id="frmJD">
-      <div class="mb-3">
-        <textarea id="jdText" class="form-control" rows="6" placeholder="Paste JD text here..."></textarea>
-      </div>
-      <div class="mb-3">
-        <input type="file" id="jdFile" name="jdfile" class="form-control" accept=".pdf,.txt,.doc,.docx">
-      </div>
-      <button id="btnAnalyze" class="btn btn-primary">Analyze with Resume</button>
+  <!-- Step 2 -->
+  <div id="step2" class="step">
+    <h2>Step 2: Match with Job Description</h2>
+    <form id="jdForm">
+      <input type="file" name="jdfile" />
+      <textarea name="jdText" rows="6" cols="50" placeholder="Or paste Job Description here"></textarea>
+      <button type="submit" class="btn">Analyze Match</button>
     </form>
-    <div id="analyzeResult" class="mt-3"></div>
+    <div id="jdResult" class="result-box"></div>
+    <button class="btn" id="back1">← Back</button>
+    <button class="btn" id="toStep3">Next →</button>
   </div>
 
-  <div id="pageStep3" class="hidden">
-    <h3>Step 3 — Skills Match</h3>
-    <div id="skillResult"></div>
-    <button id="btnToInterview" class="btn btn-primary mt-2">Generate Interview Questions</button>
+  <!-- Step 3 -->
+  <div id="step3" class="step">
+    <h2>Step 3: Interview Questions</h2>
+    <form id="interviewForm">
+      <textarea name="jdText" rows="6" cols="50" placeholder="Paste Job Description for Questions"></textarea>
+      <button type="submit" class="btn">Generate Questions</button>
+    </form>
+    <div id="qResult" class="result-box"></div>
+    <button class="btn" id="back2">← Back</button>
   </div>
 
-  <div id="pageStep4" class="hidden">
-    <h3>Interview Questions</h3>
-    <div id="qList"></div>
-  </div>
+  <script>
+    const step1 = document.getElementById("step1");
+    const step2 = document.getElementById("step2");
+    const step3 = document.getElementById("step3");
 
-  <div id="pageHistory" class="hidden">
-    <h3>History</h3>
-    <div id="historyTable"></div>
-  </div>
-</div>
+    // ---- Step 1 ----
+    document.getElementById("resumeForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const formData = new FormData(e.target);
+      const res = await fetch("/uploadResume", { method: "POST", body: formData });
+      const data = await res.json();
+      let html = `<strong>ATS Build Score:</strong> ${data.buildQualityScore}<br>`;
+      if (data.suggestions) {
+        html += `<strong>Suggestions:</strong><ul>`;
+        data.suggestions.forEach(s => html += `<li>${s}</li>`);
+        html += `</ul>`;
+      }
+      document.getElementById("qualityResult").innerHTML = html;
 
-<script>
-function showPage(id){
-  document.querySelectorAll('.container-main > div').forEach(d=>d.classList.add('hidden'));
-  document.getElementById(id).classList.remove('hidden');
-}
+      // store resumeFileId for Step 2
+      window.resumeFileId = data.fileId;
 
-document.getElementById('startBtn').addEventListener('click', ()=>{
-  showPage('pageResume');
-});
+      // enable next only if score ≥ 80
+      document.getElementById("toStep2").disabled = data.buildQualityScore < 80;
+    });
 
-async function postForm(url, formData){
-  const resp = await fetch(url, {method:'POST', body: formData});
-  return await resp.json();
-}
+    document.getElementById("toStep2").addEventListener("click", () => {
+      step1.classList.remove("active");
+      step2.classList.add("active");
+    });
 
-document.getElementById('frmResume').addEventListener('submit', async (e)=>{
-  e.preventDefault();
-  const f = e.target.resume.files[0];
-  if(!f){ alert('Select a resume file'); return; }
-  const fd = new FormData();
-  fd.append('resume', f);
-  const data = await postForm('/uploadResume', fd);
-  // store fileId and display
-  sessionStorage.setItem('resumeFileId', data.fileId || '');
-  sessionStorage.setItem('lastScan', JSON.stringify(data));
-  document.getElementById('scanResult').innerHTML = `<p><b>Build quality:</b> ${data.buildQualityScore}% — pages: ${data.pages}</p>
-    <ul>${data.improvements.map(x=>'<li>'+x+'</li>').join('')}</ul>
-    <p><b>Sample text (truncated):</b></p><pre class="sample">${(data.sampleText||'').replace(/</g,'&lt;')}</pre>
-    <p><button class="btn btn-sm btn-outline-primary" onclick="showPage('pageJD')">Proceed to JD (Step 2)</button></p>`;
-  // save history
-  const hist = JSON.parse(sessionStorage.getItem('hist')||'[]');
-  hist.unshift({n: f.name, b: data.buildQualityScore, a: null, time: new Date().toISOString(), fileId: data.fileId});
-  sessionStorage.setItem('hist', JSON.stringify(hist));
-  renderHistory();
-});
+    // ---- Step 2 ----
+    document.getElementById("jdForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const formData = new FormData(e.target);
+      if (window.resumeFileId) formData.append("resumeFileId", window.resumeFileId);
+      const res = await fetch("/analyze", { method: "POST", body: formData });
+      const data = await res.json();
+      document.getElementById("jdResult").innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+    });
 
-document.getElementById('btnAnalyze').addEventListener('click', async (e)=>{
-  e.preventDefault();
-  const resumeFileId = sessionStorage.getItem('resumeFileId');
-  if(!resumeFileId){ alert('Please upload your resume first in Step 1.'); showPage('pageResume'); return; }
-  const jdText = document.getElementById('jdText').value;
-  const jdFileElem = document.getElementById('jdFile');
-  const fd = new FormData();
-  fd.append('resumeFileId', resumeFileId);
-  if(jdFileElem.files && jdFileElem.files[0]) fd.append('jdfile', jdFileElem.files[0]);
-  fd.append('jdText', jdText);
-  const resp = await fetch('/analyze', {method:'POST', body: fd});
-  const data = await resp.json();
-  document.getElementById('analyzeResult').innerHTML = `<p><b>Match:</b> ${data.matchPercent}%</p>
-    <p><b>Top JD keywords:</b> ${data.keywords.join(', ')}</p>
-    <p><b>Found in resume:</b> ${data.found.join(', ')}</p>
-    <p><b>Missing (suggested to add):</b> ${data.missing.join(', ')}</p>
-    <p><button class="btn btn-sm btn-primary" onclick="showPage('pageStep3')">Go to Step 3 — Skills</button></p>`;
-  // update history
-  const hist = JSON.parse(sessionStorage.getItem('hist')||'[]');
-  if(hist.length>0 && hist[0].fileId===resumeFileId){ hist[0].a = data.matchPercent; sessionStorage.setItem('hist', JSON.stringify(hist)); renderHistory(); }
-});
+    document.getElementById("toStep3").addEventListener("click", () => {
+      step2.classList.remove("active");
+      step3.classList.add("active");
+    });
+    document.getElementById("back1").addEventListener("click", () => {
+      step2.classList.remove("active");
+      step1.classList.add("active");
+    });
 
-document.getElementById('btnToInterview').addEventListener('click', async ()=>{
-  const jdText = document.getElementById('jdText').value;
-  if(!jdText){ alert('Paste the JD or upload the JD file in Step 2 first.'); showPage('pageJD'); return; }
-  const resp = await fetch('/interview', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({jdText})});
-  const j = await resp.json();
-  document.getElementById('qList').innerHTML = j.questions.map((x,i)=>`<p><b>Q${i+1}:</b> ${x.q}</p>`).join('') + '<p><button class="btn btn-success">Download Questions as TXT</button></p>';
-  showPage('pageStep4');
-});
+    // ---- Step 3 ----
+    document.getElementById("interviewForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const jdText = e.target.jdText.value;
+      const res = await fetch("/interview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jdText })
+      });
+      const data = await res.json();
+      document.getElementById("qResult").innerHTML = `<ul>${data.questions.map(q => `<li>${q}</li>`).join("")}</ul>`;
+    });
 
-async function renderHistory(){
-  try{
-    const resp = await fetch('/api/history');
-    const rows = await resp.json();
-    if(!rows || rows.length===0){ document.getElementById('historyTable').innerHTML='<p>No history yet.</p>'; return; }
-    document.getElementById('historyTable').innerHTML = '<table class="table"><tr><th>Name</th><th>Build%</th><th>ATS%</th><th>Uploaded</th></tr>' +
-      rows.map(r=>`<tr><td>${r.filename}</td><td>${r.buildScore}</td><td>${r.matchPercent||'-'}</td><td>${new Date(r.created_at).toLocaleString()}</td></tr>`).join('') + '</table>';
-  }catch(e){
-    document.getElementById('historyTable').innerHTML='<p>Failed to load history.</p>';
-  }
-}
-renderHistory();
-</script>
+    document.getElementById("back2").addEventListener("click", () => {
+      step3.classList.remove("active");
+      step2.classList.add("active");
+    });
+  </script>
 </body>
 </html>
