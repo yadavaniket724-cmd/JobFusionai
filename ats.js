@@ -1,164 +1,170 @@
-
+// atsPro.js
 const fs = require('fs');
+const path = require('path');
+const readline = require('readline');
+const OpenAI = require('openai');
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-let pdfParse = null;
-try { pdfParse = require('pdf-parse'); } catch(e){ /* optional */ }
+// ---------- CONFIG ----------
+const ROLE_SKILLS = {
+  'Frontend Engineer': { 'JavaScript': 5, 'React': 5, 'TypeScript': 4, 'CSS': 4 },
+  'Backend Engineer': { 'Node.js': 5, 'Python': 5, 'AWS': 4, 'Docker': 3 }
+};
 
-let nspell = null;
-let dict = null;
-try {
-  nspell = require('nspell');
-  // load dictionary if available
-  const dictData = require('dictionary-en');
-  // dictionary-en exports a function that fetches async; handle gracefully
-  if(typeof dictData === 'function'){
-    // will set up later in init
-    dict = dictData;
-  } else {
-    // not expected, ignore
-  }
-} catch(e){
-  // not available
+const SKILL_ALIASES = {
+  'JavaScript': ['JS', 'Java Script'],
+  'Node.js': ['Node', 'NodeJS'],
+  'React': ['React.js', 'ReactJS'],
+  'AWS': ['AWS Lambda', 'Amazon Web Services']
+};
+
+const ACTION_VERBS = ['developed', 'led', 'built', 'managed', 'engineered', 'designed', 'implemented'];
+
+const SKILL_CLUSTERS = {
+  'Frontend': ['JavaScript', 'React', 'TypeScript', 'CSS'],
+  'Backend': ['Node.js', 'Python', 'Docker', 'AWS']
+};
+
+// ---------- CACHE ----------
+const cache = new Map();
+const embeddingCacheFile = path.join(__dirname, 'embeddingCache.json');
+let embeddingCache = {};
+if (fs.existsSync(embeddingCacheFile)) {
+  embeddingCache = JSON.parse(fs.readFileSync(embeddingCacheFile, 'utf8'));
 }
 
-async function loadDictionary(){
-  if(!dict || !nspell) return null;
-  // dictionary-en package returns a function that accepts a callback or returns a promise
-  try{
-    const d = await new Promise((res,rej)=>{
-      dict((err,dic)=>{
-        if(err) return rej(err);
-        res(dic);
-      });
-    });
-    const spell = nspell(d);
-    return spell;
-  }catch(e){
-    return null;
-  }
-}
-
-function simpleExtractText(filePath){
-  const buf = fs.readFileSync(filePath);
-  const s = buf.toString('utf8', 0, Math.min(500000, buf.length));
-  return s;
-}
-
-async function robustExtractText(filePath){
-  const buf = fs.readFileSync(filePath);
-  // try pdf-parse for PDFs
-  if(pdfParse && buf.slice(0,4).toString() === '%PDF'){
-    try{
-      const data = await pdfParse(buf);
-      return data.text || data.numpages ? (data.text || '') : simpleExtractText(filePath);
-    }catch(e){
-      return simpleExtractText(filePath);
+// ---------- UTILITY ----------
+function normalizeSkill(skill) {
+  for (const [canonical, aliases] of Object.entries(SKILL_ALIASES)) {
+    if (skill.toLowerCase() === canonical.toLowerCase() || aliases.some(a => a.toLowerCase() === skill.toLowerCase())) {
+      return canonical;
     }
   }
-  // fallback to text
-  return simpleExtractText(filePath);
+  return skill;
 }
 
-function wordsFromText(txt){
-  return txt.replace(/[^A-Za-z0-9\s\-]/g,' ').split(/\s+/).filter(Boolean);
+function detectExperience(text) {
+  const match = text.match(/(\d+)\+?\s*(years|yrs)/i);
+  return match ? parseInt(match[1], 10) : 0;
 }
 
-const STOPWORDS = new Set(('the of and to a in for is on that with as are by this from at it be or have has will include using using').split(' '));
+function hasActionVerb(text) {
+  return ACTION_VERBS.some(v => text.toLowerCase().includes(v));
+}
 
-function topKeywords(text,limit=20){
-  const w = wordsFromText(text.toLowerCase()).filter(x=>x.length>3 && !STOPWORDS.has(x));
-  const freq = {};
-  for(let i=0;i<w.length;i++){ const token=w[i]; freq[token]=(freq[token]||0)+1; }
-  // bigrams
-  const bigrams = {};
-  for(let i=0;i<w.length-1;i++){
-    const b = w[i]+' '+w[i+1];
-    bigrams[b] = (bigrams[b]||0)+1;
+function cosineSimilarity(vecA, vecB) {
+  const minLength = Math.min(vecA.length, vecB.length);
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < minLength; i++) {
+    dot += vecA[i] * vecB[i];
+    normA += vecA[i] ** 2;
+    normB += vecB[i] ** 2;
   }
-  const uni = Object.keys(freq).sort((a,b)=>freq[b]-freq[a]).slice(0,Math.max(5,limit-5));
-  const bi = Object.keys(bigrams).sort((a,b)=>bigrams[b]-bigrams[a]).slice(0,Math.min(5,limit-uni.length));
-  const combined = uni.concat(bi).slice(0,limit);
-  return combined;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB) + 1e-8);
 }
 
-function estimatePagesFromText(txt){
-  if(txt.startsWith('%PDF')) {
-    const m = (txt.match(/\/Type\s*\/Page/gi)||[]).length;
-    return Math.max(1,m);
-  } else {
-    const lines = txt.split('\n').length;
-    return Math.max(1, Math.ceil(lines/60));
-  }
+// ---------- EMBEDDINGS ----------
+async function getEmbedding(text, id) {
+  if (embeddingCache[id]) return embeddingCache[id];
+  const response = await openai.embeddings.create({ model: 'text-embedding-3-small', input: text });
+  const embedding = response.data[0].embedding;
+  embeddingCache[id] = embedding;
+  return embedding;
 }
 
-async function checkResumeQuality(filePath, spellObj){
-  const txt = await robustExtractText(filePath);
-  const words = wordsFromText(txt);
-  const pages = estimatePagesFromText(txt);
-  let score = 100;
-  const improvements = [];
+function saveEmbeddingCache() {
+  fs.writeFileSync(embeddingCacheFile, JSON.stringify(embeddingCache), 'utf8');
+}
 
-  if(pages>2){ score -= 20; improvements.push("Consider reducing resume to 1-2 pages unless you have extensive experience."); }
-  if(!/experience/i.test(txt)) { score -= 15; improvements.push("Add an 'Experience' section with role, company and dates."); }
-  if(!/education/i.test(txt)) { score -= 10; improvements.push("Add an 'Education' section."); }
-  if(!/skills/i.test(txt)) { score -= 10; improvements.push("Add a 'Skills' or 'Technical Skills' section listing technologies."); }
-  if(!/@[A-Za-z0-9.\-]+/.test(txt)) { score -= 10; improvements.push("Include a valid email address in contact details."); }
-  if(txt.includes('\t')){ score -= 5; improvements.push("Avoid tab-delimited formatting; use consistent spacing or tables."); }
-  if(/\s{3,}/.test(txt)){ score -= 5; improvements.push("Remove excessive spaces; use consistent formatting."); }
+// ---------- LINE SCORING ----------
+function scanLine(line, roleSkills) {
+  if (cache.has(line)) return cache.get(line);
 
-  // basic spell-check: test top frequent words that aren't proper nouns
-  const freq = {};
-  words.forEach(w=>{ const lw=w.toLowerCase(); freq[lw]=(freq[lw]||0)+1; });
-  const common = Object.keys(freq).sort((a,b)=>freq[b]-freq[a]).slice(0,200);
-  const suspect = [];
-  if(spellObj){
-    for(const w of common.slice(0,100)){
-      if(w.length>2 && !spellObj.correct(w)){
-        suspect.push(w);
-      }
-    }
-  } else {
-    // heuristic fallback: long tokens or tokens with repeated chars
-    for(const w of common.slice(0,100)){
-      if(w.length>18 || /(.)\1\1/.test(w)) suspect.push(w);
+  let skillScore = 0;
+  const matchedSkills = [];
+
+  for (const [skill, weight] of Object.entries(roleSkills)) {
+    const pattern = [skill, ...(SKILL_ALIASES[skill] || [])];
+    if (pattern.some(p => line.toLowerCase().includes(p.toLowerCase()))) {
+      const contextMultiplier = hasActionVerb(line) ? 2 : 1;
+      skillScore += weight * contextMultiplier;
+      matchedSkills.push(skill);
     }
   }
-  if(suspect.length>0){ score -= Math.min(15, suspect.length); improvements.push("Run a spell-check — some words may be misspelled: "+suspect.slice(0,8).join(', ')); }
 
-  score = Math.max(0, Math.min(100, score));
-  return {buildQualityScore:score,improvements,pages, sampleText: txt.slice(0,1000)};
+  const experienceScore = detectExperience(line) * 0.5;
+  const totalScore = skillScore + experienceScore;
+  const result = { totalScore, skillScore, experienceScore, matchedSkills };
+  cache.set(line, result);
+  return result;
 }
 
-async function analyzeResumeWithJD(resumePath, jdFilePath, jdText){
-  const rtxt = (await robustExtractText(resumePath)).toLowerCase();
-  let jdt = jdText||'';
-  if(jdFilePath) jdt = (await robustExtractText(jdFilePath)) || jdt;
-  jdt = jdt.toLowerCase();
-  const keywords = topKeywords(jdt, 25);
-  const found = keywords.filter(k=> rtxt.includes(k));
-  const missing = keywords.filter(k=> !rtxt.includes(k));
-  const matchPercent = keywords.length? Math.round(found.length/keywords.length*100) : 0;
-  return {keywords,found,missing,matchPercent};
-}
+// ---------- PROCESS SINGLE RESUME ----------
+async function processResume(candidate, role, jobEmbeddings) {
+  let totalScore = 0;
+  let matchedSkills = [];
+  let resumeText = '';
 
-function generateInterviewQuestions(jdText, limit=10){
-  const kws = topKeywords(jdText, 20);
-  const templates = [
-    k => `Can you describe your experience with ${k} and how you applied it in a project?`,
-    k => `What challenges have you faced while working with ${k} and how did you overcome them?`,
-    k => `Explain a scenario where ${k} improved a business outcome.`,
-    k => `How would you approach a task involving ${k}?`,
-    k => `Which tools or libraries do you use with ${k}, and why?`,
-    k => `Give an example of a measurable result you achieved using ${k}.`,
-    k => `How do you keep your knowledge of ${k} up to date?`
-  ];
-  const qs = [];
-  for(let i=0;i<limit;i++){
-    const k = kws[i % kws.length] || 'the required skill';
-    const t = templates[i % templates.length];
-    qs.push({q: t(k), key:k});
+  const rl = readline.createInterface({
+    input: fs.createReadStream(candidate.resumeFilePath),
+    crlfDelay: Infinity
+  });
+
+  const roleSkills = ROLE_SKILLS[role] || {};
+  let lineNumber = 0;
+
+  for await (const line of rl) {
+    lineNumber++;
+    resumeText += line + ' ';
+    const { totalScore: lineScore, matchedSkills: skills, skillScore } = scanLine(line, roleSkills);
+    const sectionBonus = lineNumber <= 20 ? skillScore * 0.2 : 0;
+    totalScore += lineScore + sectionBonus;
+    matchedSkills.push(...skills);
   }
-  return qs;
+
+  const resumeEmbedding = await getEmbedding(resumeText, `resume-${candidate.id}`);
+  let semanticScore = 0;
+  for (const jobEmbedding of jobEmbeddings) {
+    semanticScore += cosineSimilarity(resumeEmbedding, jobEmbedding) * 10;
+  }
+  totalScore += semanticScore;
+
+  const clusterScores = {};
+  for (const [cluster, skills] of Object.entries(SKILL_CLUSTERS)) {
+    clusterScores[cluster] = matchedSkills.filter(s => skills.includes(s)).length;
+  }
+
+  return {
+    id: candidate.id,
+    name: candidate.name,
+    totalScore,
+    matchedSkills,
+    clusterScores,
+    resumeFilePath: candidate.resumeFilePath
+  };
 }
 
-module.exports = { loadDictionary, checkResumeQuality, analyzeResumeWithJD, generateInterviewQuestions, robustExtractText };
+// ---------- PROCESS ALL CANDIDATES ----------
+async function processAllCandidates(candidates, roles, jobDescriptions, concurrencyLimit = 5) {
+  const jobEmbeddings = [];
+  for (let i = 0; i < jobDescriptions.length; i++) {
+    const embedding = await getEmbedding(jobDescriptions[i], `job-${i}`);
+    jobEmbeddings.push(embedding);
+  }
+
+  const results = [];
+  for (let i = 0; i < candidates.length; i += concurrencyLimit) {
+    const batch = candidates.slice(i, i + concurrencyLimit);
+    const batchResults = await Promise.all(batch.map(c => processResume(c, c.role, jobEmbeddings)));
+    results.push(...batchResults);
+  }
+
+  saveEmbeddingCache();
+  return results.sort((a, b) => b.totalScore - a.totalScore);
+}
+
+// ---------- EXPORT MODULE ----------
+module.exports = {
+  processResume,
+  processAllCandidates
+};
