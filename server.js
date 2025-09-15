@@ -1,6 +1,5 @@
 /**
- * server.js - Express backend for JobFusionAI
- * Render-safe: app initialized before routes & heavy ATS logic deferred
+ * server.js - JobFusionAI backend + frontend for Render
  */
 
 const express = require("express");
@@ -9,7 +8,7 @@ const path = require("path");
 const fs = require("fs");
 const cors = require("cors");
 
-// Import ATS functions, but ensure heavy processing happens only on request
+// ATS functions
 const { checkResumeQuality, analyzeResumeWithJD, generateInterviewQuestions } = require("./ats");
 
 const app = express(); // Must be defined first
@@ -17,23 +16,15 @@ const upload = multer({ dest: "uploads/" });
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public"));
+app.use(express.static("public")); // Serve frontend
 
-// ---- Health check route ----
-app.get("/", (req, res) => {
-  res.send("✅ JobFusionAI backend running");
-});
-
-// ---- Routes ----
+// ---- API Routes ----
 
 // Step 1: Upload resume & analyze quality
 app.post("/uploadResume", upload.single("resume"), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No resume uploaded" });
-    }
+    if (!req.file) return res.status(400).json({ error: "No resume uploaded" });
 
-    // Heavy processing happens here
     const result = await checkResumeQuality(req.file.path);
     res.json({ ...result, fileId: req.file.filename });
   } catch (err) {
@@ -51,8 +42,6 @@ app.post("/analyze", upload.fields([{ name: "jdfile" }]), async (req, res) => {
     if (!resumeFileId) return res.status(400).json({ error: "Resume file ID missing" });
 
     const resumePath = path.join("uploads", resumeFileId);
-
-    // Heavy processing deferred until request
     const result = await analyzeResumeWithJD(resumePath, jdFile?.path, jdText);
     res.json(result);
   } catch (err) {
@@ -73,6 +62,11 @@ app.post("/interview", async (req, res) => {
     console.error("Error in /interview:", err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ---- Catch-all route to serve frontend ----
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 // ---- Start server ----
