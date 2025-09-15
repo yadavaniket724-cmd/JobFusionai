@@ -1,22 +1,19 @@
 /**
- * server.js - JobFusionAI backend + frontend for Render
+ * server.js - JobFusionAI backend + frontend (no public folder)
  */
 
 const express = require("express");
 const multer = require("multer");
 const path = require("path");
-const fs = require("fs");
-const cors = require("cors");
 
 // ATS functions
 const { checkResumeQuality, analyzeResumeWithJD, generateInterviewQuestions } = require("./ats");
 
-const app = express(); // Must be defined first
+const app = express(); // Initialize Express
 const upload = multer({ dest: "uploads/" });
 
-app.use(cors());
 app.use(express.json());
-app.use(express.static("public")); // Serve frontend
+app.use(express.urlencoded({ extended: true }));
 
 // ---- API Routes ----
 
@@ -64,9 +61,9 @@ app.post("/interview", async (req, res) => {
   }
 });
 
-// ---- Catch-all route to serve frontend ----
+// ---- Serve frontend from root ----
 app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+  res.sendFile(path.join(__dirname, "index.html"));
 });
 
 // ---- Start server ----
