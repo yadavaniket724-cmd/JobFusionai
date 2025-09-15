@@ -1,3 +1,7 @@
+app.get("/", (req, res) => {
+  res.send("✅ JobFusionAI backend running");
+});
+
 /**
  * server.js - Express backend for JobFusionAI
  */
