@@ -1,73 +1,81 @@
-/**
- * server.js - JobFusionAI backend + frontend (no public folder)
- */
-
-const express = require("express");
-const multer = require("multer");
-const path = require("path");
-
-// ATS functions
-const { checkResumeQuality, analyzeResumeWithJD, generateInterviewQuestions } = require("./ats");
-
-const app = express(); // Initialize Express
-const upload = multer({ dest: "uploads/" });
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// ---- API Routes ----
-
-// Step 1: Upload resume & analyze quality
-app.post("/uploadResume", upload.single("resume"), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: "No resume uploaded" });
-
-    const result = await checkResumeQuality(req.file.path);
-    res.json({ ...result, fileId: req.file.filename });
-  } catch (err) {
-    console.error("Error in /uploadResume:", err);
-    res.status(500).json({ error: err.message });
-  }
+// server.js - replacement for JobFusionAI
+created_at: new Date().toISOString()
+};
+history.unshift(rec);
+// return fields expected by index.html
+res.json({
+fileId: rec.id,
+fileName: rec.filename,
+buildQualityScore: rec.buildQualityScore,
+improvements: rec.suggestions,
+sampleText: (result.parsedResume && result.parsedResume.summary) || '',
+pages: result.pages || 1
+});
+} catch (err) {
+console.error('uploadResume error', err);
+res.status(500).json({ error: err.message });
+}
 });
 
-// Step 2: Analyze resume vs JD
-app.post("/analyze", upload.fields([{ name: "jdfile" }]), async (req, res) => {
-  try {
-    const jdFile = req.files?.jdfile?.[0];
-    const jdText = req.body.jdText;
-    const resumeFileId = req.body.resumeFileId;
-    if (!resumeFileId) return res.status(400).json({ error: "Resume file ID missing" });
 
-    const resumePath = path.join("uploads", resumeFileId);
-    const result = await analyzeResumeWithJD(resumePath, jdFile?.path, jdText);
-    res.json(result);
-  } catch (err) {
-    console.error("Error in /analyze:", err);
-    res.status(500).json({ error: err.message });
-  }
+// Analyze (resume + JD)
+app.post('/analyze', upload.single('jdfile'), async (req, res) => {
+try {
+const { jdText, resumeFileId } = req.body;
+// find resume path by id
+const rec = history.find(h => h.id === resumeFileId) || history[0];
+if (!rec) return res.status(400).json({ error: 'No resume available. Please upload first.' });
+const jdPath = req.file ? path.resolve(req.file.path) : null;
+
+
+const analysis = await analyzeResumeWithJD(rec.filepath, jdPath, jdText);
+// expected return: { matchPercent, keywords }
+res.json({ matchPercent: analysis.matchPercent || 0, keywords: analysis.keywords || '' });
+} catch (err) {
+console.error('analyze error', err);
+res.status(500).json({ error: err.message });
+}
 });
 
-// Step 3: Generate interview questions
-app.post("/interview", async (req, res) => {
-  try {
-    const { jdText } = req.body;
-    if (!jdText) return res.status(400).json({ error: "JD text missing" });
 
-    const result = await generateInterviewQuestions(jdText, 5);
-    res.json({ questions: result });
-  } catch (err) {
-    console.error("Error in /interview:", err);
-    res.status(500).json({ error: err.message });
-  }
+// Generate interview questions
+app.post('/generateInterview', express.json(), async (req, res) => {
+try {
+const { jdText, resumeFileId, count } = req.body;
+const rec = history.find(h => h.id === resumeFileId) || history[0];
+if (!rec) return res.status(400).json({ error: 'No resume available.' });
+// prefer jdText; fallback to parsed resume + jd
+const sourceText = jdText || (rec.parsedResume && JSON.stringify(rec.parsedResume)) || '';
+const questions = await generateInterviewQuestions(sourceText, count || 8);
+res.json({ questions });
+} catch (err) {
+console.error('generateInterview error', err);
+res.status(500).json({ error: err.message });
+}
 });
 
-// ---- Serve frontend from root ----
-app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
+
+// history endpoint
+app.get('/api/history', (req, res) => {
+res.json(history.map(h => ({ id: h.id, filename: h.filename, buildScore: h.buildQualityScore, created_at: h.created_at })));
 });
 
-// ---- Start server ----
+
+// download report: minimal HTML report (client can print or convert to PDF)
+app.get('/downloadReport/:id', (req, res) => {
+const id = req.params.id;
+const rec = history.find(h => h.id === id);
+if (!rec) return res.status(404).send('Report not found');
+const html = `<!doctype html><html><head><meta charset="utf-8"><title>Report - ${rec.filename}</title></head><body><h1>Resume Report</h1><p><b>File:</b> ${rec.filename}</p><p><b>Score:</b> ${rec.buildQualityScore}</p><pre>${JSON.stringify(rec.parsedResume||{},null,2)}</pre></body></html>`;
+res.setHeader('Content-Type', 'text/html');
+res.send(html);
+});
+
+
+// Serve frontend
+app.use(express.static(path.join(__dirname)));
+app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 JobFusionAI server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`JobFusionAI running on ${PORT}`));
